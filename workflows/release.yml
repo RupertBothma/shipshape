@@ -1,0 +1,515 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install manifest validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyYAML==6.0.2
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2.1.0
+        with:
+          kustomize-version: "5.5.0"
+
+      - name: Verify signed release tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["GITHUB_REF_NAME"]
+          token = os.environ["GITHUB_TOKEN"]
+          api_base = "https://api.github.com"
+
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def gh_get(path: str) -> dict[str, object]:
+              request = urllib.request.Request(f"{api_base}{path}", headers=headers)
+              with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+                  return json.load(response)
+
+          try:
+              ref_doc = gh_get(f"/repos/{repo}/git/ref/tags/{tag}")
+          except urllib.error.HTTPError as exc:
+              raise SystemExit(f"Failed to resolve release tag ref for {tag}: HTTP {exc.code}") from exc
+
+          ref_object = ref_doc.get("object")
+          if not isinstance(ref_object, dict):
+              raise SystemExit(f"Malformed Git ref payload for tag {tag}")
+
+          object_type = ref_object.get("type")
+          if object_type != "tag":
+              raise SystemExit(
+                  f"Tag {tag} is {object_type!r}; only annotated signed tags are allowed"
+              )
+
+          tag_sha = ref_object.get("sha")
+          if not isinstance(tag_sha, str) or not tag_sha:
+              raise SystemExit(f"Malformed annotated tag SHA for {tag}")
+
+          tag_doc = gh_get(f"/repos/{repo}/git/tags/{tag_sha}")
+          verification = tag_doc.get("verification")
+          if not isinstance(verification, dict):
+              raise SystemExit(f"Missing verification payload for tag {tag}")
+
+          verified = verification.get("verified")
+          reason = verification.get("reason", "unknown")
+          if verified is not True:
+              raise SystemExit(f"Tag signature verification failed for {tag}: reason={reason}")
+
+          print(f"Verified signed release tag {tag} (reason={reason})")
+          PY
+
+      - name: Validate release metadata
+        run: python3 hack/validate_release_metadata.py --tag "${GITHUB_REF_NAME}"
+
+      - name: Validate manifest invariants
+        run: |
+          python3 hack/validate_manifests.py \
+            --overlay test \
+            --overlay prod \
+            --controller-egress-patch examples/controller-apiserver-cidr-patch.yaml \
+            --controller-egress-patch examples/controller-egress/eks.patch.yaml \
+            --controller-egress-patch examples/controller-egress/gke.patch.yaml \
+            --controller-egress-patch examples/controller-egress/aks.patch.yaml
+
+      - name: Validate immutable production images
+        run: python3 hack/check_immutable_images.py
+
+      - name: Validate security 
+        run: python3 hack/check_doc_links.py
+
+      - name: Validate deployment order drift guard
+        run: python3 hack/validate_deployment_order.py
+
+      - name: Validate Trivy suppression metadata freshness
+        run: python3 hack/validate_trivyignore.py
+
+      - name: Validate strict production evidence gate
+        run: python3 hack/validate_production_evidence.py --environment prod
+
+  build-publish:
+    runs-on: ubuntu-latest
+    needs: validate-release
+    outputs:
+      owner: ${{ steps.vars.outputs.owner }}
+      version: ${{ steps.vars.outputs.version }}
+      app_digest: ${{ steps.build_app.outputs.digest }}
+      controller_digest: ${{ steps.build_controller.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Resolve release variables
+        id: vars
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "owner=${OWNER_LC}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push app image
+        id: build_app
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: .
+          file: app/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-helloworld:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-helloworld:sha-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Build and push controller image
+        id: build_controller
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: .
+          file: controller/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-controller:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-controller:sha-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Scan app image
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
+        with:
+          image-ref: ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-helloworld@${{ steps.build_app.outputs.digest }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore
+
+      - name: Scan controller image
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
+        with:
+          image-ref: ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-controller@${{ steps.build_controller.outputs.digest }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+
+      - name: Sign published images
+        env:
+          APP_IMAGE: ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-helloworld
+          APP_DIGEST: ${{ steps.build_app.outputs.digest }}
+          CTRL_IMAGE: ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-controller
+          CTRL_DIGEST: ${{ steps.build_controller.outputs.digest }}
+        run: |
+          cosign sign --yes "${APP_IMAGE}@${APP_DIGEST}"
+          cosign sign --yes "${CTRL_IMAGE}@${CTRL_DIGEST}"
+
+      - name: Publish app provenance attestation
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-helloworld
+          subject-digest: ${{ steps.build_app.outputs.digest }}
+          push-to-registry: true
+
+      - name: Publish controller provenance attestation
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ghcr.io/${{ steps.vars.outputs.owner }}/shipshape-controller
+          subject-digest: ${{ steps.build_controller.outputs.digest }}
+          push-to-registry: true
+
+      - name: Write release summary
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          OWNER: ${{ steps.vars.outputs.owner }}
+          APP_DIGEST: ${{ steps.build_app.outputs.digest }}
+          CTRL_DIGEST: ${{ steps.build_controller.outputs.digest }}
+        run: |
+          {
+            echo "## Release ${VERSION}";
+            echo;
+            echo "| Image | Digest |";
+            echo "|---|---|";
+            echo "| ghcr.io/${OWNER}/shipshape-helloworld:${VERSION} | \\`${APP_DIGEST}\\` |";
+            echo "| ghcr.io/${OWNER}/shipshape-controller:${VERSION} | \\`${CTRL_DIGEST}\\` |";
+            echo;
+            echo "This workflow also emits BuildKit SBOM + provenance attestations and GitHub provenance attestations.";
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Append changelog notes
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          {
+            echo;
+            echo "## Changelog";
+            awk -v ver="${VERSION}" '
+              $0 ~ "^## \\[" ver "\\]" {capture=1; next}
+              /^## \[/ && capture {exit}
+              capture {print}
+            ' CHANGELOG.md
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  post-release-smoke:
+    runs-on: ubuntu-latest
+    needs: build-publish
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install smoke-test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyYAML==6.0.2
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2.1.0
+        with:
+          kustomize-version: "5.5.0"
+
+      - name: Setup kind
+        uses: helm/kind-action@92086f6be054225fa813e0a4b13787fc9088faab # v1.13.0
+        with:
+          install_only: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and tag released images
+        env:
+          OWNER: ${{ needs.build-publish.outputs.owner }}
+          VERSION: ${{ needs.build-publish.outputs.version }}
+          APP_DIGEST: ${{ needs.build-publish.outputs.app_digest }}
+          CTRL_DIGEST: ${{ needs.build-publish.outputs.controller_digest }}
+        run: |
+          APP_REF="ghcr.io/${OWNER}/shipshape-helloworld@${APP_DIGEST}"
+          CTRL_REF="ghcr.io/${OWNER}/shipshape-controller@${CTRL_DIGEST}"
+          APP_LOCAL="shipshape/helloworld:release-${VERSION}"
+          CTRL_LOCAL="shipshape/controller:release-${VERSION}"
+
+          docker pull "${APP_REF}"
+          docker pull "${CTRL_REF}"
+          docker tag "${APP_REF}" "${APP_LOCAL}"
+          docker tag "${CTRL_REF}" "${CTRL_LOCAL}"
+
+          echo "APP_LOCAL=${APP_LOCAL}" >> "${GITHUB_ENV}"
+          echo "CTRL_LOCAL=${CTRL_LOCAL}" >> "${GITHUB_ENV}"
+
+      - name: Run post-release smoke deployment
+        run: |
+          APP_IMAGE_TEST="${APP_LOCAL}" \
+          APP_IMAGE_PROD="${APP_LOCAL}" \
+          CONTROLLER_IMAGE="${CTRL_LOCAL}" \
+          SKIP_IMAGE_BUILD="true" \
+          ./hack/e2e-kind.sh
+
+      - name: Generate release manifest bundle
+        env:
+          OWNER: ${{ needs.build-publish.outputs.owner }}
+          VERSION: ${{ needs.build-publish.outputs.version }}
+          APP_DIGEST: ${{ needs.build-publish.outputs.app_digest }}
+          CTRL_DIGEST: ${{ needs.build-publish.outputs.controller_digest }}
+        run: |
+          set -euo pipefail
+          TMP_K8S="${RUNNER_TEMP}/k8s-release"
+          BUNDLE_DIR="${RUNNER_TEMP}/release-manifests"
+          export TMP_K8S
+
+          rm -rf "${TMP_K8S}" "${BUNDLE_DIR}"
+          cp -R k8s "${TMP_K8S}"
+          mkdir -p "${BUNDLE_DIR}"
+
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          owner = os.environ["OWNER"]
+          app_digest = os.environ["APP_DIGEST"]
+          controller_digest = os.environ["CTRL_DIGEST"]
+          tmp_k8s = Path(os.environ["TMP_K8S"])
+
+          prod_kustomization = tmp_k8s / "overlays" / "prod" / "kustomization.yaml"
+          prod_doc = yaml.safe_load(prod_kustomization.read_text(encoding="utf-8"))
+          image_name = f"ghcr.io/{owner}/shipshape-helloworld"
+          images = prod_doc.get("images", [])
+          if not isinstance(images, list):
+              raise SystemExit("prod kustomization images must be a list")
+          found = False
+          for entry in images:
+              if isinstance(entry, dict) and entry.get("name") == image_name:
+                  entry["digest"] = app_digest
+                  entry.pop("newTag", None)
+                  found = True
+          if not found:
+              images.append({"name": image_name, "digest": app_digest})
+          prod_doc["images"] = images
+          prod_kustomization.write_text(yaml.safe_dump(prod_doc, sort_keys=False), encoding="utf-8")
+
+          controller_deployment = tmp_k8s / "controller" / "deployment.yaml"
+          controller_doc = yaml.safe_load(controller_deployment.read_text(encoding="utf-8"))
+          containers = (
+              controller_doc.get("spec", {})
+              .get("template", {})
+              .get("spec", {})
+              .get("containers", [])
+          )
+          if not isinstance(containers, list):
+              raise SystemExit("controller deployment containers must be a list")
+          controller_image = f"ghcr.io/{owner}/shipshape-controller@{controller_digest}"
+          updated = False
+          for container in containers:
+              if isinstance(container, dict) and container.get("name") == "controller":
+                  container["image"] = controller_image
+                  updated = True
+          if not updated:
+              raise SystemExit("controller container named 'controller' not found")
+          controller_deployment.write_text(
+              yaml.safe_dump(controller_doc, sort_keys=False), encoding="utf-8"
+          )
+          PY
+
+          kustomize build k8s/namespace > "${BUNDLE_DIR}/00-namespace.yaml"
+          kustomize build k8s/istio-ingress > "${BUNDLE_DIR}/10-istio-ingress.yaml"
+          kustomize build "${TMP_K8S}/overlays/test" > "${BUNDLE_DIR}/20-test-overlay.yaml"
+          kustomize build "${TMP_K8S}/overlays/prod" > "${BUNDLE_DIR}/30-prod-overlay-release.yaml"
+          kustomize build k8s/monitoring > "${BUNDLE_DIR}/40-monitoring.yaml"
+          kustomize build "${TMP_K8S}/controller" > "${BUNDLE_DIR}/50-controller-release.yaml"
+
+          cat > "${BUNDLE_DIR}/release-images.env" <<EOF
+          RELEASE_VERSION=${VERSION}
+          APP_IMAGE=ghcr.io/${OWNER}/shipshape-helloworld@${APP_DIGEST}
+          CONTROLLER_IMAGE=ghcr.io/${OWNER}/shipshape-controller@${CTRL_DIGEST}
+          EOF
+
+          cat > "${BUNDLE_DIR}/apply-order.txt" <<'EOF'
+          1. kubectl apply -f 00-namespace.yaml
+          2. kubectl apply -f 10-istio-ingress.yaml
+          3. kubectl apply -f 20-test-overlay.yaml
+          4. kubectl apply -f 30-prod-overlay-release.yaml
+          5. kubectl apply -f 40-monitoring.yaml
+          6. kubectl apply -f 50-controller-release.yaml
+          EOF
+
+          mkdir -p "${BUNDLE_DIR}/controller-egress"
+          cp examples/controller-apiserver-cidr-patch.yaml "${BUNDLE_DIR}/controller-egress/"
+          cp examples/controller-egress/*.patch.yaml "${BUNDLE_DIR}/controller-egress/"
+          cp docs/operations-artifacts/controller-egress-handoff.md "${BUNDLE_DIR}/controller-egress/"
+
+      - name: Upload release manifest bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-manifests-v${{ needs.build-publish.outputs.version }}
+          path: ${{ runner.temp }}/release-manifests
+
+      - name: Append release bundle summary
+        env:
+          VERSION: ${{ needs.build-publish.outputs.version }}
+        run: |
+          {
+            echo "## Release Manifest Bundle"
+            echo
+            echo "Uploaded artifact: \`release-manifests-v${VERSION}\`"
+            echo
+            echo "Contains pre-rendered apply-order manifests, \`release-images.env\`, and controller egress handoff artifacts."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  publish-github-release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-publish
+      - post-release-smoke
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Generate GitHub release notes
+        env:
+          VERSION: ${{ needs.build-publish.outputs.version }}
+          OWNER: ${{ needs.build-publish.outputs.owner }}
+          APP_DIGEST: ${{ needs.build-publish.outputs.app_digest }}
+          CTRL_DIGEST: ${{ needs.build-publish.outputs.controller_digest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+          CHANGELOG_FILE="${RUNNER_TEMP}/changelog-${VERSION}.md"
+
+          awk -v ver="${VERSION}" '
+            $0 ~ "^## \\[" ver "\\]" {capture=1; next}
+            /^## \[/ && capture {exit}
+            capture {print}
+          ' CHANGELOG.md > "${CHANGELOG_FILE}"
+
+          if [[ ! -s "${CHANGELOG_FILE}" ]]; then
+            echo "ERROR: Missing changelog section for version ${VERSION}"
+            exit 1
+          fi
+
+          {
+            echo "## Container Images"
+            echo
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| \`ghcr.io/${OWNER}/shipshape-helloworld\` | \`${APP_DIGEST}\` |"
+            echo "| \`ghcr.io/${OWNER}/shipshape-controller\` | \`${CTRL_DIGEST}\` |"
+            echo
+            echo "## Deployment Bundle"
+            echo
+            echo "- Workflow artifact: \`release-manifests-v${VERSION}\`"
+            echo "- Download run: [workflow run](${RUN_URL})"
+            echo
+            echo "## Changelog"
+            echo
+            cat "${CHANGELOG_FILE}"
+          } > "${NOTES_FILE}"
+
+          echo "NOTES_FILE=${NOTES_FILE}" >> "${GITHUB_ENV}"
+
+      - name: Publish GitHub Release object
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" \
+              --title "Release ${TAG}" \
+              --notes-file "${NOTES_FILE}"
+          else
+            gh release create "${TAG}" \
+              --verify-tag \
+              --title "Release ${TAG}" \
+              --notes-file "${NOTES_FILE}"
+          fi
+
+      - name: Append release publication summary
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            echo "## GitHub Release"
+            echo
+            echo "Published release object for \`${TAG}\` with generated notes."
+          } >> "${GITHUB_STEP_SUMMARY}"

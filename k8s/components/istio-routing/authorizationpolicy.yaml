@@ -1,0 +1,44 @@
+# L7 authorization policy that restricts traffic to helloworld pods to only
+# the Istio ingress gateway.  This complements NetworkPolicy (which operates
+# at L3/L4) by verifying the caller's mTLS identity at the application layer.
+#
+# Without this policy, any pod in the mesh with network access could call
+# the helloworld service directly, bypassing the Gateway/VirtualService
+# routing rules.
+#
+# The principal below matches the default Istio ingress gateway service
+# account.  Adjust the trust domain and namespace if your cluster uses a
+# custom Istio installation.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: helloworld-allow-ingress-only
+spec:
+  selector:
+    matchLabels:
+      app: helloworld
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            # Trust domain defaults to "cluster.local" in standard Istio installs.
+            # Adjust if using a custom meshConfig.trustDomain.
+            principals:
+              - "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"
+      to:
+        - operation:
+            # Keep /metrics internal-only (monitoring principal below) and
+            # deny public ingress access to observability internals.
+            notPaths:
+              - /metrics
+              - /metrics/*
+    - from:
+        - source:
+            # Allow Prometheus scraping from the monitoring namespace.
+            # Adjust the service account if your Prometheus deployment differs.
+            principals:
+              - "cluster.local/ns/monitoring/sa/prometheus-k8s"
+      to:
+        - operation:
+            paths:
+              - /metrics

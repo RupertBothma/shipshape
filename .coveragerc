@@ -1,0 +1,9 @@
+[run]
+omit =
+    app/tests/*
+    controller/tests/*
+
+[report]
+omit =
+    app/tests/*
+    controller/tests/*

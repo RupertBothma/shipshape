@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+# Injects the MESSAGE value from the overlay's app-vars ConfigMap into the
+# base-generated helloworld-config ConfigMap.  This eliminates the need for
+# per-overlay configMapGenerator blocks and configmap.env files.
+# Requires: app-vars.yaml must define data.MESSAGE in each overlay.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: app-vars
+      fieldPath: data.MESSAGE
+    targets:
+      - select:
+          kind: ConfigMap
+          name: helloworld-config
+        fieldPaths:
+          - data.MESSAGE

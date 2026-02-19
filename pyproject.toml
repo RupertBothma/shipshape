@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shipshape"
+version = "0.2.2"
+description = "Shipshape: production-grade multi-environment Kubernetes service with config-watching controller"
+requires-python = ">=3.14"
+dependencies = [
+  "fastapi==0.128.6",
+  "starlette==0.52.1",
+  "uvicorn[standard]==0.40.0",
+  "kubernetes==35.0.0",
+  "prometheus_client==0.24.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "PyYAML==6.0.3",
+  "httpx==0.28.1",
+  "mypy==1.19.1",
+  "pytest==9.0.2",
+  "pytest-cov==7.0.0",
+  "ruff==0.15.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["app/tests", "controller/tests", "tests/contract", "tests/hack"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "N", "UP", "SIM", "RUF", "S", "A"]
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101"]
+"hack/**" = ["S603"]
+"controller/src/health.py" = ["N802"]
+
+[tool.mypy]
+python_version = "3.14"
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+ignore_missing_imports = false
+exclude = "^(k8s|docs|hack)/"
+
+[[tool.mypy.overrides]]
+module = ["kubernetes.*", "prometheus_client.*", "opentelemetry", "opentelemetry.*"]
+ignore_missing_imports = true
+
+[tool.setuptools.packages.find]
+include = ["app*", "controller*"]

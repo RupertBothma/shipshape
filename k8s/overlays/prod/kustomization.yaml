@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shipshape
+nameSuffix: -prod
+resources:
+  - ../../base
+  - app-vars.yaml
+components:
+  # NOTE: prod-hardening must precede env-label-injection so that the
+  # topologySpreadConstraints patch is applied before the env-label
+  # replacement tries to add labels to it.
+  - ../../components/prod-hardening
+  - ../../components/pdb
+  - ../../components/hpa
+  - ../../components/istio-routing
+  - ../../components/env-label-injection
+  - ../../components/app-config-injection
+  - ../../components/istio-prod-overrides
+labels:
+  # Selector transforms stay disabled to avoid mutating third-party
+  # NetworkPolicy peer selectors inherited from the base.
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app: helloworld
+      env: prod
+# Production must deploy immutable image digests.
+# Images are injected dynamically by scripts/manage-images.sh

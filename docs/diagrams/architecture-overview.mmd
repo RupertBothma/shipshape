@@ -1,0 +1,81 @@
+flowchart LR
+    Client([External Client]) -->|HTTPS| IG[Istio Ingress Gateway]
+
+    subgraph IstioRouting[Istio Routing]
+      GW_T[Gateway test]
+      GW_P[Gateway prod]
+      VS_T[VirtualService test]
+      VS_P[VirtualService prod]
+      DR_T[DestinationRule test]
+      DR_P[DestinationRule prod]
+    end
+
+    subgraph AppLayer[Application]
+      SVC_T[Service test]
+      SVC_P[Service prod]
+      DEP_T[Deployment test]
+      DEP_P[Deployment prod]
+      CM_T[(ConfigMap test)]
+      CM_P[(ConfigMap prod)]
+    end
+
+    subgraph Security[Security Controls]
+      PA[PeerAuthentication STRICT mTLS]
+      AP[AuthorizationPolicy]
+      NP[NetworkPolicy]
+    end
+
+    subgraph Observability[Observability]
+      SM_APP[ServiceMonitor app]
+      SM_CTRL[ServiceMonitor controller]
+      PR_APP[PrometheusRule app]
+      PR_CTRL[PrometheusRule controller]
+      PROM[(Prometheus)]
+    end
+
+    subgraph ControlPlane[Controller]
+      CTRL[ConfigMap reload controller]
+      LEASE[(Lease)]
+      CTRL_PDB[PodDisruptionBudget controller]
+    end
+
+    subgraph Resources[Resource Controls]
+      HPA[HorizontalPodAutoscaler]
+      PDB_APP[PodDisruptionBudget app]
+      RQ[ResourceQuota]
+      LR[LimitRange]
+      CERT_T[Certificate test]
+      CERT_P[Certificate prod]
+    end
+
+    IG --> GW_T --> VS_T --> DR_T --> SVC_T --> DEP_T
+    IG --> GW_P --> VS_P --> DR_P --> SVC_P --> DEP_P
+
+    CM_T -.->|envFrom| DEP_T
+    CM_P -.->|envFrom| DEP_P
+
+    CTRL --> LEASE
+    CTRL -->|watch| CM_T
+    CTRL -->|watch| CM_P
+    CTRL -->|patch restart annotation| DEP_T
+    CTRL -->|patch restart annotation| DEP_P
+
+    PA -.-> DEP_T
+    PA -.-> DEP_P
+    AP -.-> DEP_T
+    AP -.-> DEP_P
+    NP -.-> DEP_T
+    NP -.-> DEP_P
+
+    SM_APP --> PROM
+    SM_CTRL --> PROM
+    PR_APP --> PROM
+    PR_CTRL --> PROM
+
+    HPA -.-> DEP_P
+    PDB_APP -.-> DEP_P
+    CTRL_PDB -.-> CTRL
+    CERT_T -.-> GW_T
+    CERT_P -.-> GW_P
+    RQ -.-> AppLayer
+    LR -.-> AppLayer

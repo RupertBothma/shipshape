@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: helloworld-controller
+  namespace: shipshape
+spec:
+  selector:
+    matchLabels:
+      app: helloworld-controller
+  endpoints:
+    - port: health
+      path: /metrics
+      interval: 30s
+

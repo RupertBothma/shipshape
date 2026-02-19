@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: helloworld-controller
+  namespace: shipshape
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: helloworld-controller

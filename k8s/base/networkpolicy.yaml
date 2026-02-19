@@ -1,0 +1,67 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: helloworld
+spec:
+  podSelector:
+    matchLabels:
+      app: helloworld
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow app traffic from the Istio ingress gateway identity and metrics
+    # scraping from the monitoring namespace.
+    #
+    # If your CNI enforces kubelet/node-origin probe traffic, apply an
+    # additional allow policy from examples/networkpolicy-probe-allow/
+    # with your node CIDR to keep health probes working under default-deny.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+          podSelector:
+            matchLabels:
+              istio: ingressgateway
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP
+  egress:
+    # DNS resolution to CoreDNS / NodeLocalDNS in kube-system.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: node-local-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Istio sidecars require control-plane connectivity for xDS/SDS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - port: 15012
+          protocol: TCP
+        - port: 15010
+          protocol: TCP

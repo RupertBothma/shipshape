@@ -1,0 +1,90 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: helloworld-controller
+  namespace: shipshape
+spec:
+  groups:
+    - name: configmap-reload-controller
+      rules:
+        - alert: ConfigMapReloadErrors
+          expr: rate(configmap_reload_errors_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ConfigMap reload controller is failing to restart deployments"
+            description: >-
+              The controller has been failing to patch deployments for env={{ $labels.env }}
+              at a rate of {{ $value | humanize }}/s over the last 5 minutes.
+        - alert: ConfigMapReloadWatchDown
+          expr: rate(configmap_reload_watch_errors_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ConfigMap reload controller watch stream is unhealthy"
+            description: >-
+              Kubernetes API watch errors are occurring at {{ $value | humanize }}/s.
+              The controller may not be detecting ConfigMap changes.
+        - alert: ConfigMapReloadMetricsAbsent
+          expr: absent_over_time(configmap_reload_leader_state[10m])
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ConfigMap reload controller metrics are absent"
+            description: >-
+              No controller metrics were scraped for at least 10 minutes.
+              This can hide watch failures and restart queue health issues.
+        - alert: ConfigMapReloadHighRestartRate
+          expr: sum(rate(configmap_reload_restarts_total[5m])) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Unusually high ConfigMap-triggered restart rate"
+            description: >-
+              Deployments are being restarted at {{ $value | humanize }}/s across
+              all environments. This may indicate a restart storm or rapid
+              ConfigMap churn.
+        - alert: ConfigMapReloadDroppedRestarts
+          expr: increase(configmap_reload_dropped_restarts_total[15m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ConfigMap pending restart flush failed during controller shutdown"
+            description: >-
+              The controller failed to flush one or more pending restart intents
+              during shutdown or leadership handoff.
+        - alert: ConfigMapReloadLeaderFlapping
+          expr: increase(configmap_reload_leader_transitions_total{transition="acquired"}[10m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ConfigMap reload controller leadership is flapping"
+            description: >-
+              Leader acquisition happened more than 3 times within 10 minutes.
+              This can cause delayed restarts and readiness instability.
+        - alert: ConfigMapReloadNoActiveLeader
+          expr: max(max_over_time(configmap_reload_leader_state[10m])) < 1
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "No active ConfigMap reload controller leader detected"
+            description: >-
+              No controller replica has reported leader_state=1 for at least
+              10 minutes. ConfigMap changes may not be reconciled.
+        - alert: ConfigMapReloadPendingRestartsStuck
+          expr: max(max_over_time(configmap_reload_pending_restarts[15m])) > 0 and sum(increase(configmap_reload_restarts_total[15m])) == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ConfigMap reload pending restart queue appears stuck"
+            description: >-
+              Pending restart queue depth has remained non-zero for 15 minutes
+              while restart counters did not advance.

@@ -1,0 +1,11 @@
+### Root endpoint
+GET http://localhost:8000/
+
+### Liveness
+GET http://localhost:8000/healthz
+
+### Readiness
+GET http://localhost:8000/readyz
+
+### Metrics
+GET http://localhost:8000/metrics

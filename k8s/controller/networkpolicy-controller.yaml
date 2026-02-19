@@ -1,0 +1,62 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: helloworld-controller
+  namespace: shipshape
+spec:
+  podSelector:
+    matchLabels:
+      app: helloworld-controller
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow controller metrics scraping from monitoring.
+    #
+    # If your CNI requires explicit kubelet/node-origin probe allow rules,
+    # apply an additive policy from examples/networkpolicy-probe-allow/
+    # with your node CIDR for port 8080.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS resolution to CoreDNS / NodeLocalDNS in kube-system.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: coredns
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: node-local-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow Kubernetes API server access only via explicit CIDR allow-lists.
+    #
+    # The default placeholder below intentionally denies traffic. Replace it
+    # before production use with environment-specific control-plane endpoint
+    # CIDRs via examples/controller-egress/*.patch.yaml.
+    - to:
+        - ipBlock:
+            cidr: 127.255.255.255/32
+      ports:
+        - protocol: TCP
+          port: 443

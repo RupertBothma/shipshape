@@ -1,0 +1,25 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: helloworld-virtualservice
+spec:
+  exportTo:
+    # Ingress gateway runs in istio-system; keep visibility minimal but allow
+    # that namespace to consume these VirtualServices.
+    - "."
+    - "istio-system"
+  hosts:
+    - placeholder.local
+  gateways:
+    - helloworld-gateway
+  http:
+    - timeout: 10s
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure
+      route:
+        - destination:
+            host: helloworld
+            port:
+              number: 80

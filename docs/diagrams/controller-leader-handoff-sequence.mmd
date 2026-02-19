@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant L1 as "Leader Pod"
+    participant APIServer as "Kubernetes API"
+    participant L2 as "Standby Pod"
+
+    L1->>APIServer: "Renew Lease"
+    note over L1: "Controller watch loop active"
+
+    APIServer--xL1: "Renew fails / timeout"
+    L1->>L1: "Set stop event"
+    L1->>L1: "Force pending restarts"
+    L1->>L1: "Clear readiness"
+
+    L2->>APIServer: "Try acquire lease"
+    APIServer-->>L2: "Lease granted"
+    L2->>L2: "Record acquire latency metric"
+    L2->>L2: "Start controller watch loop"
+    L2->>L2: "Set readiness"

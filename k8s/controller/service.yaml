@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: helloworld-controller
+  namespace: shipshape
+spec:
+  selector:
+    app: helloworld-controller
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health
+      protocol: TCP
+

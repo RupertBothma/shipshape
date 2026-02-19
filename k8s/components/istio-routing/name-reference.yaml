@@ -1,0 +1,16 @@
+nameReference:
+  - kind: Gateway
+    group: networking.istio.io
+    fieldSpecs:
+      - kind: VirtualService
+        group: networking.istio.io
+        path: spec/gateways
+  - kind: Service
+    version: v1
+    fieldSpecs:
+      - kind: VirtualService
+        group: networking.istio.io
+        path: spec/http/route/destination/host
+      - kind: DestinationRule
+        group: networking.istio.io
+        path: spec/host

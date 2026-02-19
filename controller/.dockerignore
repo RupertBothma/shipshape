@@ -1,0 +1,11 @@
+# Current CI builds use repository-root context and root `.dockerignore`.
+# Keep this file in sync if build context changes to `controller/`.
+
+tests/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.md
+.DS_Store

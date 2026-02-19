@@ -1,0 +1,30 @@
+# The controller is intentionally separate from the test/prod overlays.
+# A single controller instance watches all environments in the namespace.
+# It does not receive nameSuffix or env labels because it is environment-agnostic.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shipshape
+resources:
+- serviceaccount.yaml
+- role.yaml
+- rolebinding.yaml
+- deployment.yaml
+- pdb.yaml
+- service.yaml
+- networkpolicy-controller.yaml
+- servicemonitor.yaml
+- prometheusrule.yaml
+  # Keep selector transforms disabled so controller NetworkPolicy peer
+  # selectors (DNS/API server paths) are not rewritten by kustomize labels.
+labels:
+- includeTemplates: true
+  pairs:
+    app: helloworld-controller
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: helloworld-controller
+    app.kubernetes.io/part-of: shipshape
+images:
+- digest: sha256:aaf41843b215d031b65e723d41f9d49ef96be4233b0493867e1bcbd14dda9c32
+  name: shipshape/controller
+  newName: localhost:51521/shipshape-controller

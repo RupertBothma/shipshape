@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shipshape
+nameSuffix: -test
+resources:
+  - ../../base
+  - app-vars.yaml
+components:
+  # NOTE: test-defaults must precede env-label-injection so that the
+  # topologySpreadConstraints patch is applied before the env-label
+  # replacement tries to add labels to it.
+  - ../../components/test-defaults
+  - ../../components/istio-routing
+  - ../../components/env-label-injection
+  - ../../components/app-config-injection
+labels:
+  # Selector transforms stay disabled to avoid mutating third-party
+  # NetworkPolicy peer selectors inherited from the base.
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app: helloworld
+      env: test
+# Test overlay images are injected dynamically by scripts/manage-images.sh

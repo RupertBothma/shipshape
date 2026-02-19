@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+# Injects the "env" label from the overlay's app-vars ConfigMap into all
+# owned selectors (Deployment, Service, NetworkPolicy, PDB).  This avoids
+# mutating third-party NetworkPolicy peer selectors (kube-dns, istio, etc.)
+# which would happen with includeSelectors: true on the labels transformer.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: app-vars
+      fieldPath: data.ENV
+    targets:
+      - select:
+          kind: Deployment
+        fieldPaths:
+          - spec.selector.matchLabels.env
+          - spec.template.metadata.labels.env
+          - spec.template.spec.topologySpreadConstraints.0.labelSelector.matchLabels.env
+        options:
+          create: true
+      - select:
+          kind: Service
+        fieldPaths:
+          - spec.selector.env
+        options:
+          create: true
+      - select:
+          kind: NetworkPolicy
+        fieldPaths:
+          - spec.podSelector.matchLabels.env
+        options:
+          create: true
+      - select:
+          kind: PodDisruptionBudget
+        fieldPaths:
+          - spec.selector.matchLabels.env
+        options:
+          create: true

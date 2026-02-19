@@ -1,0 +1,20 @@
+# Optional additive NetworkPolicy for CNIs that require explicit node-origin
+# probe allow rules. Replace cidr with your node InternalIP range.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: helloworld-kubelet-probes
+  namespace: shipshape
+spec:
+  podSelector:
+    matchLabels:
+      app: helloworld
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.0.0.0/16
+      ports:
+        - protocol: TCP
+          port: 8000

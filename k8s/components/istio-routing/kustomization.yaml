@@ -1,0 +1,57 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - gateway.yaml
+  - virtualservice.yaml
+  - destinationrule.yaml
+  - certificate.yaml
+  - peerauthentication.yaml
+  - authorizationpolicy.yaml
+# Replacements propagate values from the overlay's app-vars ConfigMap
+# into all Istio resources, eliminating per-overlay patch files.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: app-vars
+      fieldPath: data.HOSTNAME
+    targets:
+      - select:
+          kind: Gateway
+        fieldPaths:
+          - spec.servers.0.hosts.0
+          - spec.servers.1.hosts.0
+      - select:
+          kind: VirtualService
+        fieldPaths:
+          - spec.hosts.0
+      - select:
+          kind: Certificate
+        fieldPaths:
+          - spec.dnsNames.0
+  - source:
+      kind: ConfigMap
+      name: app-vars
+      fieldPath: data.TLS_SECRET_NAME
+    targets:
+      - select:
+          kind: Gateway
+        fieldPaths:
+          - spec.servers.1.tls.credentialName
+      - select:
+          kind: Certificate
+        fieldPaths:
+          - spec.secretName
+  - source:
+      kind: ConfigMap
+      name: app-vars
+      fieldPath: data.CLUSTER_ISSUER
+    targets:
+      - select:
+          kind: Certificate
+        fieldPaths:
+          - spec.issuerRef.name
+  # Kustomize does not automatically update Istio VirtualService gateway
+  # references when nameSuffix is applied.  The configurations file teaches
+  # Kustomize about the Gateway → VirtualService name reference.
+configurations:
+  - name-reference.yaml

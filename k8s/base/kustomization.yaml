@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- serviceaccount.yaml
+- deployment.yaml
+- service.yaml
+- networkpolicy.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+- envs:
+  - configmap.env
+  name: helloworld-config
+  # Keep selector transforms disabled so external peer selectors in
+  # NetworkPolicy (kube-dns, coredns, istio ingressgateway) remain exact.
+labels:
+- includeTemplates: true
+  pairs:
+    app: helloworld
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: helloworld
+    app.kubernetes.io/part-of: shipshape
+images:
+- digest: sha256:aa17142b1884b5bbf80d9e8923172f864f39856f9cd191e0453c54567bac5ff9
+  name: shipshape/helloworld
+  newName: localhost:51521/shipshape-helloworld

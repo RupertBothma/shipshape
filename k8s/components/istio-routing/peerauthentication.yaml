@@ -1,0 +1,15 @@
+# Enforce STRICT mutual TLS for all service-to-service communication within
+# the shipshape namespace.  This ensures that traffic between pods (and from
+# the ingress gateway sidecar to app sidecars) is encrypted and mutually
+# authenticated, even if NetworkPolicy is misconfigured.
+#
+# With STRICT mode, plaintext connections to any pod in this namespace are
+# rejected by the Envoy sidecar.  This is a defense-in-depth measure on top
+# of NetworkPolicy (L3/L4 controls).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: shipshape-strict-mtls
+spec:
+  mtls:
+    mode: STRICT

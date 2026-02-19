@@ -1,0 +1,294 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Weekly Monday 6 AM UTC — catches newly disclosed CVEs between pushes.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: Validate release metadata coherence
+        run: python3 hack/validate_release_metadata.py
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Mypy
+        run: mypy app controller
+
+      - name: Pytest
+        run: pytest --cov=app --cov=controller --cov-config=.coveragerc --cov-fail-under=80
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install manifest validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyYAML==6.0.2
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2.1.0
+        with:
+          kustomize-version: "5.5.0"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz
+          echo "c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3  kubeconform.tar.gz" | sha256sum --check
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
+      - name: Validate namespace
+        run: |
+          kustomize build k8s/namespace | kubeconform -strict
+
+      - name: Validate app monitoring manifest
+        run: |
+          kustomize build k8s/monitoring | kubeconform -strict \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+      - name: Validate manifest invariants
+        run: |
+          python hack/validate_manifests.py \
+            --overlay test \
+            --overlay prod \
+            --controller-egress-patch examples/controller-apiserver-cidr-patch.yaml \
+            --controller-egress-patch examples/controller-egress/eks.patch.yaml \
+            --controller-egress-patch examples/controller-egress/gke.patch.yaml \
+            --controller-egress-patch examples/controller-egress/aks.patch.yaml
+
+      - name: Validate immutable production images
+        run: |
+          python3 hack/check_immutable_images.py
+
+      - name: Validate security 
+        run: |
+          python3 hack/check_doc_links.py
+
+      - name: Validate deployment order drift guard
+        run: |
+          python3 hack/validate_deployment_order.py
+
+      - name: Validate Trivy suppression metadata freshness
+        run: |
+          python3 hack/validate_trivyignore.py
+
+      - name: Validate test overlay
+        run: |
+          kustomize build k8s/overlays/test | kubeconform -strict \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+      - name: Validate prod overlay
+        run: |
+          kustomize build k8s/overlays/prod | kubeconform -strict \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+      - name: Validate controller manifest
+        run: |
+          kustomize build k8s/controller | kubeconform -strict \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+      - name: Validate Istio ingress rate-limit manifest
+        run: |
+          kustomize build k8s/istio-ingress | kubeconform -strict \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+      - name: Security policy check
+        run: |
+          for overlay in test prod; do
+            kustomize build k8s/overlays/$overlay | \
+              OVERLAY="$overlay" python3 -c "
+          import sys, os, yaml
+          overlay = os.environ['OVERLAY']
+          for doc in yaml.safe_load_all(sys.stdin):
+            if not doc or doc.get('kind') != 'Deployment': continue
+            for c in doc.get('spec',{}).get('template',{}).get('spec',{}).get('containers',[]):
+              sc = c.get('securityContext',{})
+              assert sc.get('allowPrivilegeEscalation') == False, f'{c[\"name\"]}: allowPrivilegeEscalation must be false'
+              assert sc.get('readOnlyRootFilesystem') == True, f'{c[\"name\"]}: readOnlyRootFilesystem must be true'
+              assert 'ALL' in (sc.get('capabilities',{}).get('drop',[])), f'{c[\"name\"]}: must drop ALL capabilities'
+          print(f'[{overlay}] security policies passed')
+          "
+          done
+          kustomize build k8s/controller | \
+            python3 -c "
+          import sys, yaml
+          for doc in yaml.safe_load_all(sys.stdin):
+            if not doc or doc.get('kind') != 'Deployment': continue
+            for c in doc.get('spec',{}).get('template',{}).get('spec',{}).get('containers',[]):
+              sc = c.get('securityContext',{})
+              assert sc.get('allowPrivilegeEscalation') == False, f'{c[\"name\"]}: allowPrivilegeEscalation must be false'
+              assert sc.get('readOnlyRootFilesystem') == True, f'{c[\"name\"]}: readOnlyRootFilesystem must be true'
+              assert 'ALL' in (sc.get('capabilities',{}).get('drop',[])), f'{c[\"name\"]}: must drop ALL capabilities'
+          print('[controller] security policies passed')
+          "
+
+  e2e-kind:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [python-checks, manifests]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install e2e dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyYAML==6.0.2
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2.1.0
+        with:
+          kustomize-version: "5.5.0"
+
+      - name: Setup kind
+        uses: helm/kind-action@92086f6be054225fa813e0a4b13787fc9088faab # v1.13.0
+        with:
+          install_only: true
+
+      - name: Run kind smoke test
+        run: ./hack/e2e-kind.sh
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build app image
+        run: docker build -f app/Dockerfile -t shipshape/helloworld:ci .
+
+      - name: Build controller image
+        run: docker build -f controller/Dockerfile -t shipshape/controller:ci .
+
+      - name: Scan app image
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
+        with:
+          image-ref: shipshape/helloworld:ci
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore
+
+      - name: Scan controller image
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
+        with:
+          image-ref: shipshape/controller:ci
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore
+
+  immutable-registry-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2.1.0
+        with:
+          kustomize-version: "5.5.0"
+
+      - name: Run immutable registry smoke test
+        run: make ci-smoke-test
+
+  base-image-refresh:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Rebuild app image with refreshed base layers
+        run: docker build --pull --no-cache -f app/Dockerfile -t shipshape/helloworld:base-refresh .
+
+      - name: Rebuild controller image with refreshed base layers
+        run: docker build --pull --no-cache -f controller/Dockerfile -t shipshape/controller:base-refresh .
+
+      - name: Prepare report directory
+        run: mkdir -p reports
+
+      - name: Scan rebuilt app image (non-blocking)
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
+        with:
+          image-ref: shipshape/helloworld:base-refresh
+          format: table
+          output: reports/trivy-app-base-refresh.txt
+          exit-code: 0
+          severity: CRITICAL,HIGH,MEDIUM
+          trivyignores: .trivyignore
+
+      - name: Scan rebuilt controller image (non-blocking)
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # 0.33.1
+        with:
+          image-ref: shipshape/controller:base-refresh
+          format: table
+          output: reports/trivy-controller-base-refresh.txt
+          exit-code: 0
+          severity: CRITICAL,HIGH,MEDIUM
+          trivyignores: .trivyignore
+
+      - name: Upload base-image refresh reports
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: base-image-refresh-reports
+          path: reports
+
+      - name: Append base-image refresh summary
+        run: |
+          {
+            echo "## Base Image Refresh"
+            echo
+            echo "Rebuilt app/controller images with --pull --no-cache and uploaded Trivy reports as artifact \`base-image-refresh-reports\`."
+            echo "This job is non-blocking and intended for weekly vulnerability drift monitoring."
+          } >> "${GITHUB_STEP_SUMMARY}"

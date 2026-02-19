@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: helloworld-controller
+  namespace: shipshape
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Followers intentionally fail /readyz when not leader; allow one
+      # unavailable pod so rolling updates can progress with active/standby.
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: helloworld-controller
+  template:
+    metadata:
+      labels:
+        app: helloworld-controller
+      annotations:
+        # The controller does not serve mesh traffic; skip sidecar injection
+        # to reduce resource pressure and startup latency in CI.
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: helloworld-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Keep this above LEADER_ELECTION_CONTROLLER_STOP_TIMEOUT_SECONDS (45s
+      # default) so leadership handoff can stop the watch loop cleanly.
+      terminationGracePeriodSeconds: 60
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: helloworld-controller
+      containers:
+        - name: controller
+          image: shipshape/controller
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: APP_SELECTOR
+              value: app=helloworld
+            - name: ROLLOUT_ANNOTATION_KEY
+              value: shipshape.io/restartedAt
+            - name: LOG_LEVEL
+              value: INFO
+            - name: DEBOUNCE_SECONDS
+              value: "5"
+            - name: LEADER_ELECTION_ENABLED
+              value: "true"
+            - name: LEADER_ELECTION_LEASE_NAME
+              value: helloworld-controller-leader
+            - name: LEADER_ELECTION_LEASE_DURATION_SECONDS
+              value: "15"
+            - name: LEADER_ELECTION_RENEW_DEADLINE_SECONDS
+              value: "10"
+            - name: LEADER_ELECTION_RETRY_PERIOD_SECONDS
+              value: "2"
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 8080
+              name: health
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            failureThreshold: 10
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              # /readyz is leadership-aware and returns 503 on followers.
+              # Use /healthz for pod readiness so active/standby replicas
+              # can both become Ready during rolling updates.
+              path: /healthz
+              port: health
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

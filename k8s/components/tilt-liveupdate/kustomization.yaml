@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+# Disables readOnlyRootFilesystem so Tilt can sync files into the container.
+# Uses a JSON patch with target selector (no name) so it works regardless of
+# nameSuffix applied by the parent overlay.
+patches:
+  - target:
+      kind: Deployment
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/securityContext/readOnlyRootFilesystem
+        value: false

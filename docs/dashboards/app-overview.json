@@ -1,0 +1,140 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "id": null,
+  "uid": "shipshape-app-overview",
+  "title": "Shipshape App Overview",
+  "tags": ["shipshape", "helloworld"],
+  "timezone": "utc",
+  "schemaVersion": 36,
+  "version": 3,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "title": "Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{env=\"prod\",path!=\"other\"}[5m])) by (path, method, status)",
+          "legendFormat": "{{ method }} {{ path }} {{ status }}"
+        }
+      ]
+    },
+    {
+      "title": "5xx Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{env=\"prod\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{env=\"prod\"}[5m]))",
+          "legendFormat": "5xx ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "thresholds": { "steps": [
+          { "color": "green", "value": null },
+          { "color": "yellow", "value": 0.01 },
+          { "color": "red", "value": 0.05 }
+        ]}}
+      }
+    },
+    {
+      "title": "Latency Percentiles",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{env=\"prod\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{env=\"prod\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{env=\"prod\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Latency by Endpoint (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{env=\"prod\"}[5m])) by (le, path))",
+          "legendFormat": "{{ path }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Error Budget Burn Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_requests_total{env=\"prod\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{env=\"prod\"}[5m])), 0.001)) / 0.001",
+          "legendFormat": "burn-5m"
+        },
+        {
+          "expr": "(sum(rate(http_requests_total{env=\"prod\",status=~\"5..\"}[1h])) / clamp_min(sum(rate(http_requests_total{env=\"prod\"}[1h])), 0.001)) / 0.001",
+          "legendFormat": "burn-1h"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 6 },
+              { "color": "red", "value": 14.4 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "In-Flight Requests",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "max(http_in_flight_requests{env=\"prod\"})",
+          "legendFormat": "in-flight"
+        }
+      ]
+    },
+    {
+      "title": "Config Load Timestamp",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "max(app_config_loaded_timestamp_seconds{env=\"prod\"})",
+          "legendFormat": "loaded-at"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "dateTimeAsIso" } }
+    },
+    {
+      "title": "Startup Config Metadata",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 30 },
+      "targets": [
+        {
+          "expr": "max by (source, config_fingerprint, app_version) (app_config_loaded_info{env=\"prod\"})",
+          "legendFormat": "{{ source }} {{ app_version }} {{ config_fingerprint }}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# Trivy CVE suppressions
+# Review this file periodically and remove entries once upstream fixes are available.
+# Check status: trivy image --severity HIGH,CRITICAL <image> (without --ignorefile)
+
+# CVE-2026-0861 — glibc (libc-bin, libc6) in Debian 13.3 (python:3.14.3-slim@sha256:486b8092…)
+# Severity: HIGH | No fixed version available as of 2026-02-07
+# Affected packages: libc-bin 2.41-12+deb13u1, libc6 2.41-12+deb13u1
+# owner: platform-security
+# expires: 2026-03-15
+# Tracking: https://security-tracker.debian.org/tracker/CVE-2026-0861
+# TODO: Remove this suppression once Debian publishes a patched glibc.
+CVE-2026-0861

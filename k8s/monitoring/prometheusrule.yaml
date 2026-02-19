@@ -1,0 +1,300 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: helloworld
+  namespace: shipshape
+spec:
+  groups:
+    - name: helloworld-app
+      rules:
+        - alert: HelloworldHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{env="prod",status=~"5.."}[5m]))
+              /
+              sum(rate(http_requests_total{env="prod"}[5m]))
+            ) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            environment: prod
+          annotations:
+            summary: "Helloworld 5xx error rate is elevated"
+            description: >-
+              The 5xx error ratio for the prod helloworld service has exceeded
+              5% for the last 10 minutes. 
+        - alert: HelloworldHighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(http_request_duration_seconds_bucket{env="prod"}[5m])) by (le)
+            ) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            environment: prod
+          annotations:
+            summary: "Helloworld p95 latency is elevated"
+            description: >-
+              The p95 latency for the prod helloworld service is above 500ms
+              for the last 10 minutes.
+        - alert: HelloworldErrorBudgetBurnFast
+          expr: |
+            (
+              (
+                sum(rate(http_requests_total{env="prod",status=~"5.."}[5m]))
+                /
+                clamp_min(sum(rate(http_requests_total{env="prod"}[5m])), 0.001)
+              ) > (14.4 * 0.001)
+            )
+            and
+            (
+              (
+                sum(rate(http_requests_total{env="prod",status=~"5.."}[1h]))
+                /
+                clamp_min(sum(rate(http_requests_total{env="prod"}[1h])), 0.001)
+              ) > (14.4 * 0.001)
+            )
+          for: 2m
+          labels:
+            severity: critical
+            environment: prod
+          annotations:
+            summary: "Helloworld SLO error budget burn is critical"
+            description: >-
+              Prod error budget burn exceeds 14.4x in both 5m and 1h windows,
+              indicating severe user-impacting reliability degradation.
+        - alert: HelloworldErrorBudgetBurnSlow
+          expr: |
+            (
+              (
+                sum(rate(http_requests_total{env="prod",status=~"5.."}[30m]))
+                /
+                clamp_min(sum(rate(http_requests_total{env="prod"}[30m])), 0.001)
+              ) > (6 * 0.001)
+            )
+            and
+            (
+              (
+                sum(rate(http_requests_total{env="prod",status=~"5.."}[6h]))
+                /
+                clamp_min(sum(rate(http_requests_total{env="prod"}[6h])), 0.001)
+              ) > (6 * 0.001)
+            )
+          for: 15m
+          labels:
+            severity: warning
+            environment: prod
+          annotations:
+            summary: "Helloworld SLO error budget burn is elevated"
+            description: >-
+              Prod error budget burn exceeds 6x in both 30m and 6h windows,
+              indicating sustained reliability degradation.
+        - alert: HelloworldTestHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{env="test",status=~"5.."}[10m]))
+              /
+              sum(rate(http_requests_total{env="test"}[10m]))
+            ) > 0.10
+          for: 15m
+          labels:
+            severity: warning
+            environment: test
+            paging: "false"
+          annotations:
+            summary: "Helloworld test 5xx error rate is elevated"
+            description: >-
+              Non-paging signal: the 5xx error ratio for the test helloworld
+              service has exceeded 10% for 15 minutes.
+        - alert: HelloworldTestHighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(http_request_duration_seconds_bucket{env="test"}[10m])) by (le)
+            ) > 0.75
+          for: 15m
+          labels:
+            severity: warning
+            environment: test
+            paging: "false"
+          annotations:
+            summary: "Helloworld test p95 latency is elevated"
+            description: >-
+              Non-paging signal: the p95 latency for the test helloworld
+              service is above 750ms for 15 minutes.
+    - name: helloworld-infrastructure
+      rules:
+        - alert: KubePodCrashLooping
+          expr: |
+            increase(
+              kube_pod_container_status_restarts_total{
+                namespace="shipshape"
+              }[15m]
+            ) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash-looping"
+            description: >-
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              has restarted more than 3 times in the last 15 minutes.
+        - alert: KubePodHighMemory
+          expr: |
+            (
+              container_memory_working_set_bytes{
+                namespace="shipshape",
+                container!="",
+                container!="POD",
+                image!=""
+              }
+              /
+              container_spec_memory_limit_bytes{
+                namespace="shipshape",
+                container!="",
+                container!="POD",
+                image!=""
+              }
+            ) > 0.9
+            and on (namespace, pod, container)
+            container_spec_memory_limit_bytes{
+              namespace="shipshape",
+              container!="",
+              container!="POD",
+              image!=""
+            } > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} memory usage is above 90% of limit"
+            description: >-
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              is using {{ $value | humanizePercentage }} of its memory limit.
+        - alert: HelloworldProdHPANearMaxReplicas
+          expr: |
+            (
+              kube_horizontalpodautoscaler_status_desired_replicas{
+                namespace="shipshape",
+                horizontalpodautoscaler="helloworld-prod"
+              }
+              /
+              clamp_min(
+                kube_horizontalpodautoscaler_spec_max_replicas{
+                  namespace="shipshape",
+                  horizontalpodautoscaler="helloworld-prod"
+                },
+                1
+              )
+            ) >= 0.9
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "HPA helloworld-prod is near max replicas"
+            description: >-
+              The prod HPA desired replica count has been at or above 90% of
+              maxReplicas for at least 15 minutes.
+        - alert: HelloworldProdPDBDisruptionsExhausted
+          expr: |
+            kube_poddisruptionbudget_status_pod_disruptions_allowed{
+              namespace="shipshape",
+              poddisruptionbudget="helloworld-prod"
+            } < 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PDB helloworld-prod allows no further disruptions"
+            description: >-
+              PodDisruptionBudget helloworld-prod currently allows zero
+              additional disruptions, which can block safe node drains.
+        - alert: HelloworldProdPDBInsufficientHealthyPods
+          expr: |
+            kube_poddisruptionbudget_status_current_healthy{
+              namespace="shipshape",
+              poddisruptionbudget="helloworld-prod"
+            }
+            <
+            kube_poddisruptionbudget_status_desired_healthy{
+              namespace="shipshape",
+              poddisruptionbudget="helloworld-prod"
+            }
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PDB helloworld-prod healthy pods below required minimum"
+            description: >-
+              PodDisruptionBudget helloworld-prod reports fewer healthy pods
+              than required by minAvailable.
+        - alert: CertManagerCertExpiringSoon
+          expr: |
+            (certmanager_certificate_expiration_timestamp_seconds{namespace="shipshape"}
+             - time()) < 604800
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ $labels.name }} expires in less than 7 days"
+            description: >-
+              The cert-manager certificate {{ $labels.name }} in namespace
+              {{ $labels.namespace }} expires in {{ $value | humanizeDuration }}.
+        - alert: IstioGateway5xxRate
+          expr: |
+            (
+              sum(rate(istio_requests_total{
+                reporter="source",
+                destination_service_namespace="shipshape",
+                request_host="prod.helloworld.shipshape.example.com",
+                response_code=~"5.."
+              }[5m]))
+              /
+              sum(rate(istio_requests_total{
+                reporter="source",
+                destination_service_namespace="shipshape",
+                request_host="prod.helloworld.shipshape.example.com"
+              }[5m]))
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            environment: prod
+          annotations:
+            summary: "Istio ingress 5xx error rate for prod host is above 5%"
+            description: >-
+              The 5xx error ratio observed at the Istio ingress gateway for
+              prod.helloworld.shipshape.example.com has exceeded 5% for 5 minutes.
+        - alert: IstioGateway429Saturation
+          expr: |
+            (
+              sum(rate(istio_requests_total{
+                reporter="source",
+                destination_service_namespace="shipshape",
+                request_host="prod.helloworld.shipshape.example.com",
+                response_code="429"
+              }[10m]))
+              /
+              clamp_min(sum(rate(istio_requests_total{
+                reporter="source",
+                destination_service_namespace="shipshape",
+                request_host="prod.helloworld.shipshape.example.com"
+              }[10m])), 0.001)
+            ) > 0.20
+            and
+            sum(rate(istio_requests_total{
+              reporter="source",
+              destination_service_namespace="shipshape",
+              request_host="prod.helloworld.shipshape.example.com"
+            }[10m])) > 1
+          for: 10m
+          labels:
+            severity: warning
+            environment: prod
+          annotations:
+            summary: "Istio ingress 429 rate-limit saturation is sustained"
+            description: >-
+              More than 20% of ingress requests for
+              prod.helloworld.shipshape.example.com are being throttled with
+              HTTP 429 for 10 minutes at non-trivial traffic volume.

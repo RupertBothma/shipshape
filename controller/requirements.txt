@@ -1,0 +1,3 @@
+kubernetes==35.0.0
+prometheus_client==0.24.1
+
