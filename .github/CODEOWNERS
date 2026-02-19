@@ -1,0 +1,13 @@
+# Platform team owns Kubernetes manifests, CI/CD, and infrastructure tooling.
+k8s/                    @RupertBothma
+.github/                @RupertBothma
+hack/                   @RupertBothma
+flake.nix               @RupertBothma
+Makefile                @RupertBothma
+
+# Application team owns the helloworld service and controller.
+app/                    @RupertBothma
+controller/             @RupertBothma
+
+# Both teams review shared project configuration.
+pyproject.toml          @RupertBothma
