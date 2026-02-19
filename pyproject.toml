@@ -10,7 +10,7 @@ requires-python = ">=3.14"
 dependencies = [
   "fastapi==0.129.0",
   "starlette==0.52.1",
-  "uvicorn[standard]==0.40.0",
+  "uvicorn[standard]==0.41.0",
   "kubernetes==35.0.0",
   "prometheus_client==0.24.1",
 ]
