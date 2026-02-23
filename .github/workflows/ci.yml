@@ -205,7 +205,7 @@ jobs:
         run: docker build -f controller/Dockerfile -t shipshape/controller:ci .
 
       - name: Scan app image
-        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # 0.34.0
+        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518 # 0.34.1
         with:
           image-ref: shipshape/helloworld:ci
           format: table
@@ -214,7 +214,7 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Scan controller image
-        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # 0.34.0
+        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518 # 0.34.1
         with:
           image-ref: shipshape/controller:ci
           format: table
@@ -259,7 +259,7 @@ jobs:
         run: mkdir -p reports
 
       - name: Scan rebuilt app image (non-blocking)
-        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # 0.34.0
+        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518 # 0.34.1
         with:
           image-ref: shipshape/helloworld:base-refresh
           format: table
@@ -269,7 +269,7 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Scan rebuilt controller image (non-blocking)
-        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # 0.34.0
+        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518 # 0.34.1
         with:
           image-ref: shipshape/controller:base-refresh
           format: table
